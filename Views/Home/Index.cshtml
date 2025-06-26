@@ -1,0 +1,274 @@
+﻿@model List<CEBVehicleTracker.Models.Vehicle>
+@{
+    ViewData["Title"] = "CEB Vehicle Tracker";
+    var vehicles = ViewBag.Vehicles as List<string> ?? new List<string>();
+}
+
+<!DOCTYPE html>
+<html>
+<head>
+    <title>@ViewData["Title"]</title>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.7.1/dist/leaflet.css" />
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+        
+        #container {
+            display: flex;
+            height: 100vh;
+        }
+        
+        #sidebar {
+            width: 300px;
+            background: #2c3e50;
+            color: white;
+            padding: 20px;
+            overflow-y: auto;
+        }
+        
+        #map {
+            flex: 1;
+            height: 100%;
+        }
+        
+        .vehicle-list {
+            margin-top: 20px;
+        }
+        
+        .vehicle-item {
+            padding: 10px;
+            margin-bottom: 5px;
+            background: #34495e;
+            border-radius: 4px;
+            cursor: pointer;
+            transition: background 0.3s;
+        }
+        
+        .vehicle-item:hover {
+            background: #3d566e;
+        }
+        
+        .header {
+            font-size: 1.5em;
+            margin-bottom: 20px;
+            padding-bottom: 10px;
+            border-bottom: 1px solid #34495e;
+        }
+        
+        select {
+            width: 100%;
+            padding: 10px;
+            border-radius: 4px;
+            border: none;
+            background: #34495e;
+            color: white;
+            margin-bottom: 20px;
+        }
+        
+        .info-window {
+            padding: 10px;
+            background: white;
+            border-radius: 4px;
+            box-shadow: 0 0 10px rgba(0,0,0,0.2);
+        }
+        
+        .info-window h3 {
+            margin-top: 0;
+            color: #2c3e50;
+        }
+        
+        .info-window p {
+            margin: 5px 0;
+            color: #7f8c8d;
+        }
+
+        .moving-marker {
+            filter: hue-rotate(0deg) brightness(1); /* Red */
+        }
+        .stopped-marker {
+            filter: hue-rotate(200deg) brightness(1.2); /* Blue */
+        }
+
+        #statusPanel {
+            position: absolute;
+            bottom: 10px;
+            left: 310px;
+            z-index: 1000;
+            background: white;
+            padding: 5px 10px;
+            border-radius: 3px;
+            box-shadow: 0 0 5px rgba(0,0,0,0.2);
+            transition: opacity 0.5s;
+        }
+        .status-error {
+            color: red;
+        }
+        .status-warning {
+            color: orange;
+        }
+        .status-success {
+            color: rgb(128, 47, 0);
+        }
+        .fade-out {
+            opacity: 0;
+        }
+    </style>
+</head>
+<body>
+    <div id="container">
+        <div id="sidebar">
+            <div class="header">CEB Vehicle Tracker</div>
+            <select id="vehicleSelect">
+                <option value="">All Vehicles</option>
+                @foreach (var vehicle in vehicles)
+                {
+                    <option value="@vehicle">@vehicle</option>
+                }
+            </select>
+            <div class="vehicle-list" id="vehicleList"></div>
+        </div>
+        <div id="map"></div>
+        <div id="statusPanel">Loading vehicle data...</div>
+    </div>
+
+    <script src="https://unpkg.com/leaflet@1.7.1/dist/leaflet.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/microsoft-signalr/8.0.0/signalr.min.js"></script>
+    <script>
+        // Initialize the map
+        var map = L.map('map').setView([7.2906, 80.6337], 10); // Default center (Sri Lanka)
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            attribution: '© OpenStreetMap contributors'
+        }).addTo(map);
+
+        // Define custom icons for moving and stopped vehicles
+        var movingIcon = L.divIcon({
+            className: 'moving-marker',
+            html: '<svg width="20" height="20" viewBox="0 0 32 32"><circle cx="16" cy="16" r="10" fill="red" stroke="black" stroke-width="2"/><circle cx="16" cy="16" r="5" fill="white"/></svg>',
+            iconSize: [32, 32],
+            iconAnchor: [16, 32],
+            popupAnchor: [0, -32]
+        });
+
+        var stoppedIcon = L.divIcon({
+            className: 'stopped-marker',
+            html: '<svg width="20" height="20" viewBox="0 0 32 32"><circle cx="16" cy="16" r="10" fill="blue" stroke="black" stroke-width="2"/><circle cx="16" cy="16" r="5" fill="white"/></svg>',
+            iconSize: [32, 32],
+            iconAnchor: [16, 32],
+            popupAnchor: [0, -32]
+        });
+
+        // Store markers and vehicle data
+        var markers = {};
+        var vehicleData = []; // Store SignalR vehicle data
+        var markerLayerGroup = L.layerGroup().addTo(map); // Layer group for markers
+
+        // SignalR connection
+        var connection = new signalR.HubConnectionBuilder()
+            .withUrl("/vehicleHub")
+            .build();
+
+        connection.on("ReceiveVehicleUpdate", function (vehicles) {
+            console.log('Received vehicles:', vehicles); // Debug: Log received data
+            vehicleData = vehicles; // Update global vehicle data
+
+            // Clear all existing markers from the layer group
+            markerLayerGroup.clearLayers();
+            markers = {}; // Reset the markers object
+
+            // Update vehicle list in sidebar
+            var vehicleList = document.getElementById('vehicleList');
+            vehicleList.innerHTML = '';
+            if (vehicles.length === 0) {
+                console.warn('No vehicles received from SignalR');
+                var statusPanel = document.getElementById('statusPanel');
+                statusPanel.innerText = 'No vehicles available';
+                statusPanel.className = 'status-warning';
+            } else {
+                vehicles.forEach(function (vehicle, index) {
+                    console.log('Vehicle:', {
+                        id: vehicle.id,
+                        name: vehicle.name,
+                        hasValidPosition: vehicle.hasValidPosition,
+                        position: vehicle.position
+                    });
+
+                    if (vehicle.hasValidPosition) {
+                        var lat = vehicle.position.latitude;
+                        var lng = vehicle.position.longitude;
+                        // Choose icon based on vehicle movement status
+                        var icon = vehicle.isMoving ? movingIcon : stoppedIcon;
+                        var marker = L.marker([lat, lng], { icon: icon })
+                            .bindPopup(`<div class="info-window"><h3>${vehicle.name}</h3><p>Speed: ${vehicle.position.speed} km/h</p><p>Status: ${vehicle.isMoving ? 'Moving' : 'Stopped'}</p></div>`);
+                        markerLayerGroup.addLayer(marker); // Add to layer group
+                        markers[vehicle.id] = marker;
+
+                        // Add vehicle to sidebar list
+                        var vehicleItem = document.createElement('div');
+                        vehicleItem.className = 'vehicle-item';
+                        vehicleItem.innerText = vehicle.name;
+                        vehicleItem.onclick = function () {
+                            map.setView([lat, lng], 15);
+                            marker.openPopup();
+                        };
+                        vehicleList.appendChild(vehicleItem);
+                    } else {
+                        console.warn(`Vehicle ${vehicle.name || vehicle.id} skipped: Invalid position`, vehicle.position);
+                    }
+                });
+
+                // Update status
+                var statusPanel = document.getElementById('statusPanel');
+                statusPanel.innerText = `Vehicles updated (${vehicles.length})`;
+                statusPanel.className = 'status-success';
+                setTimeout(function () {
+                    statusPanel.className = 'status-success fade-out';
+                }, 2000);
+            }
+        });
+
+        connection.onclose(function () {
+            console.error('SignalR connection closed');
+            var statusPanel = document.getElementById('statusPanel');
+            statusPanel.innerText = 'Connection lost. Reconnecting...';
+            statusPanel.className = 'status-error';
+        });
+
+        // Handle vehicle selection
+        document.getElementById('vehicleSelect').addEventListener('change', function (e) {
+            var selectedVehicle = e.target.value;
+            if (selectedVehicle) {
+                var vehicle = vehicleData.find(v => v.name === selectedVehicle);
+                if (vehicle && vehicle.hasValidPosition) {
+                    map.setView([vehicle.position.latitude, vehicle.position.longitude], 15);
+                    markers[vehicle.id].openPopup();
+                } else {
+                    console.warn(`Selected vehicle ${selectedVehicle} not found or invalid position`);
+                }
+            } else {
+                map.setView([7.2906, 80.6337], 10);
+            }
+        });
+
+        // Start the connection and tracking
+        connection.start().then(function () {
+            console.log('SignalR connection started');
+            connection.invoke("StartTracking").catch(function (err) {
+                console.error('Error starting tracking:', err.toString());
+                var statusPanel = document.getElementById('statusPanel');
+                statusPanel.innerText = 'Error starting tracking: ' + err.toString();
+                statusPanel.className = 'status-error';
+            });
+        }).catch(function (err) {
+            console.error('Error connecting to SignalR:', err.toString());
+            var statusPanel = document.getElementById('statusPanel');
+            statusPanel.innerText = 'Error connecting: ' + err.toString();
+            statusPanel.className = 'status-error';
+        });
+    </script>
+</body>
+</html>
