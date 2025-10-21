@@ -38,27 +38,7 @@ Pramodya Warnakula
 
 Internship Project – 2025 | GPS Tracking System
 
-## ✅ Final Step: Upload to GitHub
 
-Once you:
-1. Remove/replace private tokens
-2. Create `README.md`
-3. Add `.gitignore`
-
-Run this from your project folder:
-
-```bash
-git init
-git remote add origin https://github.com/yourusername/gps-tracking-system.git
-git add .
-git commit -m "Initial commit - GPS Tracking System"
-git push -u origin main
-
-
-
----
-
-## ⚠️ Privacy Notice
 
 > **IMPORTANT:**  
 > For company confidentiality:
